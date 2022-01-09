@@ -33,7 +33,7 @@ StaticRouteConfigProviderImpl::StaticRouteConfigProviderImpl(
     : config_(new ConfigImpl(config, factory_context)), route_config_proto_{config},
       last_updated_(factory_context.timeSource().systemTime()),
       route_config_provider_manager_(route_config_provider_manager) {
-    route_config_provider_manager_.static_route_config_providers_.insert(this);
+  route_config_provider_manager_.static_route_config_providers_.insert(this);
 }
 
 StaticRouteConfigProviderImpl::~StaticRouteConfigProviderImpl() {
@@ -248,13 +248,13 @@ void RdsRouteConfigProviderImpl::validateConfig(
   ConfigImpl validation_config(config, factory_context_);
 }
 
-RouteConfigProviderManagerImpl::RouteConfigProviderManagerImpl(Server::Admin&) {
-  // TODO print config
-  // config_tracker_entry_ =
-  //    admin.getConfigTracker().add("routes", [this] { return dumpRouteConfigs(); });
-  // ConfigTracker keys must be unique. We are asserting that no one has stolen the "routes" key
-  // from us, since the returned entry will be nullptr if the key already exists.
-  // RELEASE_ASSERT(config_tracker_entry_, "");
+RouteConfigProviderManagerImpl::RouteConfigProviderManagerImpl(Server::Admin& admin) {
+  config_tracker_entry_ =
+      admin.getConfigTracker().add("meta_protocol_routes", [this] { return dumpRouteConfigs(); });
+  // ConfigTracker keys must be unique. We are asserting that no one has stolen the
+  // "meta_protocol_routes" key from us, since the returned entry will be nullptr if the key already
+  // exists.
+  RELEASE_ASSERT(config_tracker_entry_, "");
 }
 
 RouteConfigProviderSharedPtr RouteConfigProviderManagerImpl::createRdsRouteConfigProvider(
