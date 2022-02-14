@@ -199,39 +199,53 @@ Router::UpstreamRequest::~UpstreamRequest() = default;
 
 FilterStatus Router::UpstreamRequest::start() {
   Tcp::ConnectionPool::Cancellable* handle = conn_pool_.newConnection(*this);
+
+  // The handle is not null means that there is no ready connection in the pool
+  // The onPoolReady callback method will be called when the connection is ready
   if (handle) {
     // Pause while we wait for a connection.
     conn_pool_handle_ = handle;
     return FilterStatus::StopIteration;
   }
 
+  // The handle is null means that there are ready connections in the pool
+  // The onPoolReady will be called immediately with a pooled connection
   return FilterStatus::Continue;
 }
 
-void Router::UpstreamRequest::resetStream() {
-  stream_reset_ = true;
+void Router::UpstreamRequest::onPoolReady(Tcp::ConnectionPool::ConnectionDataPtr&& conn_data,
+                                          Upstream::HostDescriptionConstSharedPtr host) {
+  ENVOY_CONN_LOG(debug, "meta protocol upstream request: tcp connection is ready",
+                 conn_data->connection());
 
-  if (conn_pool_handle_) {
-    ASSERT(!conn_data_);
-    conn_pool_handle_->cancel(Tcp::ConnectionPool::CancelPolicy::Default);
-    conn_pool_handle_ = nullptr;
-    ENVOY_LOG(debug, "meta protocol upstream request: reset connection pool handler");
+  // Only invoke continueDecoding if we'd previously stopped the filter chain.
+  bool continue_decoding = conn_pool_handle_ != nullptr;
+  // Only set idle timeout checker when the connection is created
+  bool init_conn = conn_pool_handle_ != nullptr;
+  // Clear conn_pool_handle_ since connection has already been created
+  conn_pool_handle_ = nullptr;
+
+  onUpstreamHostSelected(host);
+  host->outlierDetector().putResult(Upstream::Outlier::Result::LocalOriginConnectSuccess);
+
+  conn_data_ = std::move(conn_data);
+  conn_data_->addUpstreamCallbacks(parent_);
+
+  // Start idle timeout checker for the upstream connection
+  if (init_conn) {
+    startConnTimeoutChecker(conn_data_->connection());
   }
 
-  if (conn_data_) {
-    ASSERT(!conn_pool_handle_);
-    conn_data_->connection().close(Network::ConnectionCloseType::NoFlush);
-    conn_data_.reset();
-    ENVOY_LOG(debug, "meta protocol upstream request: reset connection data");
-  }
+  onRequestStart(continue_decoding);
+  encodeData(parent_.upstream_request_buffer_);
 }
 
-void Router::UpstreamRequest::encodeData(Buffer::Instance& data) {
-  ASSERT(conn_data_);
-  ASSERT(!conn_pool_handle_);
-
-  ENVOY_STREAM_LOG(trace, "proxying {} bytes", *parent_.callbacks_, data.length());
-  conn_data_->connection().write(data, false);
+void Router::UpstreamRequest::startConnTimeoutChecker(Network::ClientConnection& connection) {
+  ENVOY_CONN_LOG(debug, "meta protocol: start connection idle timeout timer", connection);
+  std::shared_ptr<IdleTimeoutChecker> checker =
+      std::make_shared<IdleTimeoutChecker>(connection, conn_data_->connection().dispatcher());
+  conn_data_->connection().addWriteFilter(checker);
+  conn_data_->connection().addConnectionCallbacks(*checker);
 }
 
 void Router::UpstreamRequest::onPoolFailure(ConnectionPool::PoolFailureReason reason,
@@ -260,22 +274,30 @@ void Router::UpstreamRequest::onPoolFailure(ConnectionPool::PoolFailureReason re
   }
 }
 
-void Router::UpstreamRequest::onPoolReady(Tcp::ConnectionPool::ConnectionDataPtr&& conn_data,
-                                          Upstream::HostDescriptionConstSharedPtr host) {
-  ENVOY_LOG(debug, "meta protocol upstream request: tcp connection has ready");
+void Router::UpstreamRequest::resetStream() {
+  stream_reset_ = true;
 
-  // Only invoke continueDecoding if we'd previously stopped the filter chain.
-  bool continue_decoding = conn_pool_handle_ != nullptr;
+  if (conn_pool_handle_) {
+    ASSERT(!conn_data_);
+    conn_pool_handle_->cancel(Tcp::ConnectionPool::CancelPolicy::Default);
+    conn_pool_handle_ = nullptr;
+    ENVOY_LOG(debug, "meta protocol upstream request: reset connection pool handler");
+  }
 
-  onUpstreamHostSelected(host);
-  host->outlierDetector().putResult(Upstream::Outlier::Result::LocalOriginConnectSuccess);
+  if (conn_data_) {
+    ASSERT(!conn_pool_handle_);
+    conn_data_->connection().close(Network::ConnectionCloseType::NoFlush);
+    conn_data_.reset();
+    ENVOY_LOG(debug, "meta protocol upstream request: reset connection data");
+  }
+}
 
-  conn_data_ = std::move(conn_data);
-  conn_data_->addUpstreamCallbacks(parent_);
-  conn_pool_handle_ = nullptr;
+void Router::UpstreamRequest::encodeData(Buffer::Instance& data) {
+  ASSERT(conn_data_);
+  ASSERT(!conn_pool_handle_);
 
-  onRequestStart(continue_decoding);
-  encodeData(parent_.upstream_request_buffer_);
+  ENVOY_STREAM_LOG(trace, "proxying {} bytes", *parent_.callbacks_, data.length());
+  conn_data_->connection().write(data, false);
 }
 
 void Router::UpstreamRequest::onRequestStart(bool continue_decoding) {
@@ -358,8 +380,68 @@ void Router::UpstreamRequest::onResetStream(ConnectionPool::PoolFailureReason re
   }
 }
 
+IdleTimeoutChecker::IdleTimeoutChecker(Network::ClientConnection& connection,
+                                       Event::Dispatcher& dispatcher)
+    : connection_(connection) {
+  idle_timer_ = dispatcher.createTimer([this]() -> void { onIdleTimeout(); });
+  enableIdleTimer();
+}
+
+Network::FilterStatus IdleTimeoutChecker::onWrite(Buffer::Instance&, bool) {
+  resetIdleTimer();
+  return Network::FilterStatus::Continue;
+}
+
+void IdleTimeoutChecker::onIdleTimeout() {
+  ENVOY_CONN_LOG(debug, "meta protocol: connection idle timeout, close", connection_);
+  connection_.close(Network::ConnectionCloseType::NoFlush);
+  cleanup();
+}
+
+void IdleTimeoutChecker::resetIdleTimer() {
+  disableIdleTimer();
+  enableIdleTimer();
+}
+
+void IdleTimeoutChecker::disableIdleTimer() {
+  if (idle_timer_ != nullptr) {
+    idle_timer_->disableTimer();
+  }
+}
+
+void IdleTimeoutChecker::enableIdleTimer() {
+  if (idle_timer_ != nullptr) {
+    idle_timer_->enableTimer(std::chrono::milliseconds(10 * 1000));
+  }
+}
+
+void IdleTimeoutChecker::onEvent(Network::ConnectionEvent event) {
+  switch (event) {
+  case Network::ConnectionEvent::RemoteClose:
+    cleanup();
+    break;
+  case Network::ConnectionEvent::LocalClose:
+    cleanup();
+    break;
+  case Network::ConnectionEvent::Connected:
+    break;
+  default:
+    // Connected is consumed by the connection pool.
+    NOT_REACHED_GCOVR_EXCL_LINE;
+  }
+}
+
+void IdleTimeoutChecker::cleanup() {
+  if (idle_timer_ != nullptr) {
+    idle_timer_->disableTimer();
+    idle_timer_.reset();
+  }
+  connection_.removeConnectionCallbacks(*this);
+}
+
 } // namespace Router
 } // namespace  MetaProtocolProxy
 } // namespace NetworkFilters
 } // namespace Extensions
 } // namespace Envoy
+

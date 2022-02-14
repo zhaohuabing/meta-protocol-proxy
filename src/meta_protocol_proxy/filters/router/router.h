@@ -72,6 +72,7 @@ private:
     void onResponseComplete();
     void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host);
     void onResetStream(ConnectionPool::PoolFailureReason reason);
+    void startConnTimeoutChecker(Network::ClientConnection& connection);
 
     Router& parent_;
     Tcp::ConnectionPool::Instance& conn_pool_;
@@ -104,8 +105,34 @@ private:
   bool filter_complete_{false};
 };
 
+class IdleTimeoutChecker : public Network::ConnectionCallbacks,
+                           public Network::WriteFilter,
+                           Logger::Loggable<Logger::Id::filter> {
+public:
+  IdleTimeoutChecker(Network::ClientConnection& connection, Event::Dispatcher& dispatcher);
+  ~IdleTimeoutChecker() override { ENVOY_LOG(debug, "~IdleTimeoutChecker()"); };
+
+  // Network::WriteFilter
+  Network::FilterStatus onWrite(Buffer::Instance& data, bool end_stream) override;
+  void initializeWriteFilterCallbacks(Network::WriteFilterCallbacks&) override{};
+
+  // Network::ConnectionCallbacks
+  void onEvent(Network::ConnectionEvent event) override;
+  void onAboveWriteBufferHighWatermark() override{};
+  void onBelowWriteBufferLowWatermark() override{};
+
+private:
+  void onIdleTimeout();
+  void resetIdleTimer();
+  void disableIdleTimer();
+  void enableIdleTimer();
+  void cleanup();
+  Network::ClientConnection& connection_;
+  Event::TimerPtr idle_timer_;
+};
 } // namespace Router
 } // namespace MetaProtocolProxy
 } // namespace NetworkFilters
 } // namespace Extensions
 } // namespace Envoy
+
