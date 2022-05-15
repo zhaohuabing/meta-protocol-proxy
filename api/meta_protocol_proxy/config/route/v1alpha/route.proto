@@ -52,6 +52,16 @@ message RouteMatch {
 }
 
 message RouteAction {
+  message RequestMirrorPolicy {
+    // Specifies the cluster that requests will be mirrored to. The cluster must
+    // exist in the cluster manager configuration.
+    string cluster = 1 [(validate.rules).string = {min_bytes: 1}];
+
+    // If not specified, all requests to the target cluster will be mirrored.
+    //
+    // If specified, the portion of the traffic which should be mirrored.
+    core.RuntimeFractionalPercent runtime_fraction = 2;
+  }
   oneof cluster_specifier {
     option (validate.required) = true;
 
@@ -66,6 +76,8 @@ message RouteAction {
   }
   // Specifies a list of keys in th metadata to use for ring hash load balancing.
   repeated string hash_policy = 10 [(validate.rules).repeated = {max_items: 100}];
+  // Indicates that the route has request mirroring policies.
+  repeated RequestMirrorPolicy request_mirror_policies = 11;
 }
 
 // Key /value pair.
