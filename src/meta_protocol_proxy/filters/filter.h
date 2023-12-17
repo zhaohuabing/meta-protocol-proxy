@@ -10,18 +10,21 @@
 #include "src/meta_protocol_proxy/codec/codec.h"
 
 #include "src/meta_protocol_proxy/decoder_event_handler.h"
+#include "src/meta_protocol_proxy/request_id/config.h"
 #include "src/meta_protocol_proxy/route/route.h"
+#include "src/meta_protocol_proxy/tracing/tracer.h"
+#include "src/meta_protocol_proxy/upstream_handler.h"
+#include "src/meta_protocol_proxy/filters/filter_define.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
 namespace MetaProtocolProxy {
 
-enum class UpstreamResponseStatus : uint8_t {
-  MoreData = 0, // The upstream response requires more data.
-  Complete = 1, // The upstream response is complete.
-  Reset = 2,    // The upstream response is invalid and its connection must be reset.
-  Retry = 3, // The upstream response is failure need to retry. TODO not used, may remove it later
+struct GetUpstreamHandlerResult {
+  absl::optional<Error> error;
+  UpstreamHandlerSharedPtr upstream_handler;
+  std::string response_code_detail;
 };
 
 class DirectResponse {
@@ -59,7 +62,7 @@ using DirectResponsePtr = std::unique_ptr<DirectResponse>;
 class CodecFactory {
 public:
   virtual ~CodecFactory() = default;
-  
+
   /**
    * Create a codec, which will be used by the router to encode request and response
    * @return CodecPtr
@@ -154,9 +157,56 @@ public:
   /**
    * Set the selected upstream connection, used by router.
    * This method is used to initialize the upstream connection for a streaming RPC
-   * @param conn supplies the upstream's connection
+   * @param conn supplies the upstream connection
    */
   virtual void setUpstreamConnection(Tcp::ConnectionPool::ConnectionDataPtr conn) PURE;
+
+  /**
+   * Get the tracer, used by router to create tracing spans
+   * @return
+   */
+  virtual Tracing::MetaProtocolTracerSharedPtr tracer() PURE;
+
+  /**
+   * Get the Tracing Config of this MetaProtocol Proxy
+   * @return null pointer if tracing is not enabled
+   */
+  virtual Tracing::TracingConfig* tracingConfig() PURE;
+
+  /**
+   *  Get the Request ID Extension, which is used by the router to generate x-request-id
+   * @return
+   */
+  virtual RequestIDExtensionSharedPtr requestIDExtension() PURE;
+
+  /**
+   * Get the Access Loggers of this MetaProtocol Proxy
+   * @return
+   */
+  virtual const std::vector<AccessLog::InstanceSharedPtr>& accessLogs() PURE;
+
+  /**
+   * @brief get upstream handler
+   *
+   * @param cluster_name
+   * @param context
+   * @return
+   */
+  virtual GetUpstreamHandlerResult getUpstreamHandler(const std::string& cluster_name,
+                                                      Upstream::LoadBalancerContext& context) PURE;
+
+  /**
+   * @brief is multiplexing
+   *
+   * @return true
+   * @return false
+   */
+  virtual bool multiplexing() PURE;
+
+  /**
+   * on upstream response
+   */
+  virtual void onUpstreamResponse() PURE;
 };
 
 /**

@@ -90,9 +90,8 @@ public:
     size_t attachment_offset_{};
 
     // To reuse the HeaderMatcher API and related tools provided by Envoy, we store the key/value
-    // pair of the string type in the attachment in the Http::HeaderMap. This introduces
-    // additional overhead and ignores the case of the key in the attachment. But for now, it's
-    // acceptable.
+    // pair of the string type in the attachment in the Http::HeaderMap. This introduces additional
+    // overhead and ignores the case of the key in the attachment. But for now, it's acceptable.
     Http::HeaderMapPtr headers_;
   };
   using AttachmentPtr = std::unique_ptr<Attachment>;
@@ -134,8 +133,14 @@ public:
   bool hasException() const override { return has_exception_; }
   void setException(bool has_exception) { has_exception_ = has_exception; }
 
+  std::string getRspBody() { return bodyrsp; }
+  void setRspBody(std::string body) { bodyrsp = body; }
+
+  mutable std::unique_ptr<RpcInvocationImpl::Attachment> attachment_{};
+
 private:
   bool has_exception_{false};
+  std::string bodyrsp;
 };
 
 } // namespace Dubbo

@@ -4,8 +4,10 @@
 
 #include "envoy/buffer/buffer.h"
 #include "envoy/tcp/conn_pool.h"
+#include "envoy/tracing/trace_driver.h"
 
 #include "source/common/upstream/load_balancer_impl.h"
+#include "source/common/stream_info/stream_info_impl.h"
 
 #include "src/meta_protocol_proxy/filters/filter.h"
 #include "src/meta_protocol_proxy/filters/router/router.h"
@@ -56,10 +58,17 @@ public:
     decoder_filter_callbacks_->sendLocalReply(response, end_stream);
   };
   CodecPtr createCodec() override { return decoder_filter_callbacks_->createCodec(); };
-  void resetStream() override { decoder_filter_callbacks_->resetStream(); };
+  void resetStream() override;
   void setUpstreamConnection(Tcp::ConnectionPool::ConnectionDataPtr conn) override {
     decoder_filter_callbacks_->setUpstreamConnection(std::move(conn));
   };
+  void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host) override {
+    decoder_filter_callbacks_->streamInfo().setUpstreamInfo(
+        std::make_shared<StreamInfo::UpstreamInfoImpl>());
+    decoder_filter_callbacks_->streamInfo().upstreamInfo()->setUpstreamHost(host);
+  }
+
+  void onUpstreamResponseCallback(MetadataSharedPtr response_metadata);
 
   // This function is for testing only.
   // Envoy::Buffer::Instance& upstreamRequestBufferForTest() { return upstream_request_buffer_; }
@@ -67,19 +76,32 @@ public:
 private:
   void cleanUpstreamRequest();
   bool upstreamRequestFinished() { return upstream_request_ == nullptr; };
+  bool setXRequestID(MetadataSharedPtr& request_metadata, MutationSharedPtr& request_mutation);
+  void traceRequest(MetadataSharedPtr request_metadata, MutationSharedPtr request_mutation,
+                    const std::string& cluster_name);
+  Envoy::Tracing::Reason mutateTracingRequestMetadata(MetadataSharedPtr& request_metadata);
+  void emitLogEntry(const MetadataSharedPtr& request_metadata,
+                    const MetadataSharedPtr& response_metadata, int response_code,
+                    const std::string& response_code_detail);
+
+  void onUpstreamResponseComplete(MetadataSharedPtr response_metadata);
 
   DecoderFilterCallbacks* decoder_filter_callbacks_{};
   EncoderFilterCallbacks* encoder_filter_callbacks_{};
   Route::RouteConstSharedPtr route_{};
   const Route::RouteEntry* route_entry_{};
-  Upstream::ClusterInfoConstSharedPtr cluster_;
+  // Upstream::ClusterInfoConstSharedPtr cluster_;
 
-  std::unique_ptr<UpstreamRequest> upstream_request_;
+  std::unique_ptr<UpstreamRequestBase> upstream_request_;
   MetadataSharedPtr request_metadata_;
+  MetadataSharedPtr response_metadata_;
 
   // member variables for traffic mirroring
   Runtime::Loader& runtime_;
   ShadowWriter& shadow_writer_;
+
+  Envoy::Tracing::SpanPtr active_span_;
+  bool is_first_span_{false};
 };
 
 } // namespace Router

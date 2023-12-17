@@ -1,6 +1,8 @@
 [中文](README_ZH.md)
 
 # meta-protocol-proxy
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Faeraki-mesh%2Fmeta-protocol-proxy.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Faeraki-mesh%2Fmeta-protocol-proxy?ref=badge_shield)
+
 
 ## Why MetaProtocol is needed?
 
@@ -83,6 +85,12 @@ the MetaProtocol Proxy and the codecs of the application protocols.
 
 To build MetaProtocol proxy for production, run ```make release```.
 
+### How to solve "No space left on device error" ?
+
+Bazel generates a lot of small files while building, which often causes running out of inodes.
+
+You can use XFS instead of Ext4 file system to avoid this issue because XFS uses 64-bit structure, which can have 2^64 inodes, much more than Ext4's 32-bit structure.
+
 ## Build MetaProtocol Proxy Using Docker
 now support x86 and arm
 ### Export meta-protocol-proxy repo path
@@ -155,3 +163,7 @@ Hello Aeraki, response from 400c8a27e761/172.17.0.2
 
 This output means that the dubbo test client has successfully reached the dubbo test server through envoy MetaProtocol proxy, with the route configuration fetched from the RDS server.
 To understand how it works, you can look into [test/rds/test.yaml](test/rds/test.yaml) and play with the MetaProtocol configuration. 
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Faeraki-mesh%2Fmeta-protocol-proxy.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Faeraki-mesh%2Fmeta-protocol-proxy?ref=badge_large)

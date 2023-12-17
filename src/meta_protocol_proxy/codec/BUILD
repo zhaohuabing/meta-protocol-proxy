@@ -11,6 +11,8 @@ envoy_cc_library(
     hdrs = ["codec.h"],
     deps = [
         "@envoy//envoy/buffer:buffer_interface",
+	"@envoy//envoy/tracing:trace_context_interface",
+        "@envoy//envoy/stream_info:stream_info_interface",
     ],
 )
 

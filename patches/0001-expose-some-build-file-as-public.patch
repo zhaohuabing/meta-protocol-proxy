@@ -1,0 +1,17 @@
+diff --git source/extensions/common/wasm/BUILD source/extensions/common/wasm/BUILD
+index 5cc45cd98c..96b158aa45 100644
+--- source/extensions/common/wasm/BUILD
++++ source/extensions/common/wasm/BUILD
+@@ -67,11 +67,7 @@ envoy_cc_library(
+             "-DWASM_USE_CEL_PARSER",
+         ],
+     }),
+-    visibility = [
+-        "//source/extensions:__subpackages__",
+-        "//test/extensions:__subpackages__",
+-        "//test/test_common:__subpackages__",
+-    ],
++	visibility = ["//visibility:public"],
+     deps = [
+         ":wasm_hdr",
+         ":wasm_runtime_factory_interface",

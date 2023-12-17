@@ -55,7 +55,7 @@ void DubboCodec::complete() {
 void DubboCodec::encode(const MetaProtocolProxy::Metadata& metadata,
                         const MetaProtocolProxy::Mutation& mutation, Buffer::Instance& buffer) {
   ENVOY_LOG(debug, "dubbo: codec server real address: {} ",
-            metadata.getString(Metadata::HEADER_REAL_SERVER_ADDRESS));
+            metadata.getString(ReservedHeaders::RealServerAddress));
 
   switch (metadata.getMessageType()) {
   case MetaProtocolProxy::MessageType::Heartbeat: {
@@ -67,13 +67,63 @@ void DubboCodec::encode(const MetaProtocolProxy::Metadata& metadata,
     break;
   }
   case MetaProtocolProxy::MessageType::Response: {
+    encodeResponse(metadata, mutation, buffer);
     break;
   }
   case MetaProtocolProxy::MessageType::Error: {
     break;
   }
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reached");
+  }
+}
+
+void DubboCodec::encodeResponse(const MetaProtocolProxy::Metadata& metadata,
+                                const MetaProtocolProxy::Mutation& mutation,
+                                Buffer::Instance& buffer) {
+
+  MessageMetadata msgMetadata;
+  toMsgMetadata(metadata, msgMetadata);
+  ENVOY_LOG(
+      debug,
+      "dubbo: msgdata is hasRpcResultInfo {}, hasResponseStatus {}, headersize {}, bodysize {}",
+      msgMetadata.hasRpcResultInfo(), msgMetadata.hasResponseStatus(), metadata.getHeaderSize(),
+      metadata.getBodySize());
+
+  bool has_mutation = false;
+  if (msgMetadata.hasRpcResultInfo()) {
+    auto* result = const_cast<RpcResultImpl*>(
+        dynamic_cast<const RpcResultImpl*>(&msgMetadata.rpcResultInfo()));
+    ENVOY_LOG(debug, "dubbo: codec result hasException {},result body {}", result->hasException(),
+              result->getRspBody());
+    if (result->attachment_ != nullptr) {
+      ENVOY_LOG(debug, "dubbo: codec result attachment_ not null offset {}",
+                result->attachment_->attachmentOffset(), result->getRspBody());
+    }
+
+    for (const auto& keyValue : mutation) {
+      ENVOY_LOG(debug, "dubbo: encodeResponse codec mutation {} : {}", keyValue.first,
+                keyValue.second);
+      if (msgMetadata.hasRpcResultInfo()) {
+        result->attachment_->remove(keyValue.first);
+        result->attachment_->insert(keyValue.first, keyValue.second);
+      }
+      has_mutation = true;
+    }
+
+    ENVOY_LOG(debug, "dubbo: encodeResponse codec attachment is {}",
+              result->attachment_->attachment().toDebugString());
+  }
+
+  if (has_mutation) {
+    // upstream server has mutation header: x-envoy-peer-metadata-id x-envoy-peer-metadata
+    // add the two headers add response
+    ContextImpl ctx;
+    ctx.setHeaderSize(metadata.getHeaderSize());
+    ctx.setBodySize(metadata.getBodySize());
+    if (!protocol_->encode(buffer, msgMetadata, ctx, "addheader")) {
+      throw EnvoyException("failed to encode request message");
+    }
   }
 }
 
@@ -112,13 +162,14 @@ void DubboCodec::toMetadata(const MessageMetadata& msgMetadata,
 
     metadata.putString("interface", invo->serviceName());
     metadata.putString("method", invo->methodName());
+    metadata.setOperationName(invo->serviceName() + "/" + invo->methodName());
     for (const auto& pair : invo->attachment().attachment()) {
       const auto key = pair.first->toString();
       const auto value = pair.second->toString();
       if (!key.has_value() || !value.has_value()) {
         continue;
       }
-      metadata.putString(*(key.value()), *(value.value()));
+      metadata.putString(key.value(), value.value());
     }
   }
   metadata.put("InvocationInfo", msgMetadata.invocationInfoPtr());
@@ -134,6 +185,19 @@ void DubboCodec::toMetadata(const MessageMetadata& msgMetadata,
   metadata.put("SerializationType", msgMetadata.serializationType());
   if (msgMetadata.hasResponseStatus()) {
     metadata.put("ResponseStatus", msgMetadata.responseStatus());
+  }
+  if (msgMetadata.hasRpcResultInfo()) {
+    auto* invo = const_cast<RpcResultImpl*>(
+        dynamic_cast<const RpcResultImpl*>(&msgMetadata.rpcResultInfo()));
+    for (const auto& pair : invo->attachment_->attachment()) {
+      const auto key = pair.first->toString();
+      const auto value = pair.second->toString();
+      if (!key.has_value() || !value.has_value()) {
+        continue;
+      }
+      metadata.putString(key.value(), value.value());
+    }
+    metadata.put("RpcResultInfo", msgMetadata.rpcResultInfoPtr());
   }
 
   switch (msgMetadata.messageType()) {
@@ -155,7 +219,7 @@ void DubboCodec::toMetadata(const MessageMetadata& msgMetadata,
     metadata.setMessageType(MetaProtocolProxy::MessageType::Heartbeat);
     break;
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reached");
   }
 
   if (msgMetadata.hasResponseStatus()) {
@@ -181,6 +245,12 @@ void DubboCodec::toMsgMetadata(const MetaProtocolProxy::Metadata& metadata,
   if (ref.has_value()) {
     const auto& invo = ref.value();
     msgMetadata.setInvocationInfo(std::any_cast<RpcInvocationSharedPtr>(invo));
+  }
+
+  ref = metadata.get("RpcResultInfo");
+  if (ref.has_value()) {
+    const auto& result = ref.value();
+    msgMetadata.setRpcResultInfo(std::any_cast<RpcResultSharedPtr>(result));
   }
 
   ref = metadata.get("ProtocolType");
@@ -243,6 +313,9 @@ void DubboCodec::encodeRequest(const MetaProtocolProxy::Metadata& metadata,
       invo->attachment().remove(keyValue.first);
       invo->attachment().insert(keyValue.first, keyValue.second);
     }
+
+    ENVOY_LOG(debug, "dubbo: codec attachment is {}",
+              invo->attachment().attachment().toDebugString());
   }
   ContextImpl ctx;
   ctx.setHeaderSize(metadata.getHeaderSize());
@@ -297,7 +370,7 @@ ProtocolState DecoderStateMachine::handleState(Buffer::Instance& buffer) {
   case ProtocolState::OnDecodeStreamData:
     return onDecodeStreamData(buffer);
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reached");
   }
 }
 

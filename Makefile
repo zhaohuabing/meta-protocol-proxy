@@ -17,7 +17,7 @@ CC := clang-10
 CXX := clang++-10
 PATH := /home/ubuntu/clang+llvm-10.0.0-linux-gnu/bin:$(PATH)
 
-BAZEL_CONFIG = -s --sandbox_debug --verbose_failures --verbose_explanations --explain=build.log --host_force_python=PY3 
+BAZEL_CONFIG = -s --sandbox_debug --verbose_failures --verbose_explanations --explain=build.log --host_force_python=PY3
 BAZEL_CONFIG_DEV  = $(BAZEL_CONFIG) --config=libc++
 BAZEL_CONFIG_REL  = $(BAZEL_CONFIG_DEV) --config=release
 BAZEL_TARGETS = envoy
@@ -37,6 +37,8 @@ api:
 	bazel build //api/meta_protocol_proxy/filters/router/v1alpha:pkg_go_proto && \
 	bazel build //api/meta_protocol_proxy/filters/local_ratelimit/v1alpha:pkg_go_proto && \
 	bazel build //api/meta_protocol_proxy/filters/global_ratelimit/v1alpha:pkg_go_proto && \
+	bazel build //api/meta_protocol_proxy/filters/metadata_exchange/v1alpha:pkg_go_proto && \
+	bazel build //api/meta_protocol_proxy/filters/istio_stats/v1alpha:pkg_go_proto && \
 	bazel build //api/meta_protocol_proxy/config/route/v1alpha:pkg_go_proto
 
 clean:

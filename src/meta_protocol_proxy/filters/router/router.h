@@ -33,15 +33,17 @@ public:
   virtual CodecPtr createCodec() PURE;
   virtual void resetStream() PURE;
   virtual void setUpstreamConnection(Tcp::ConnectionPool::ConnectionDataPtr conn) PURE;
+  virtual void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host) PURE;
 
 protected:
   struct PrepareUpstreamRequestResult {
     absl::optional<AppException> exception;
     absl::optional<Upstream::TcpPoolData> conn_pool_data;
+    std::string response_code_detail;
   };
 
   PrepareUpstreamRequestResult prepareUpstreamRequest(const std::string& cluster_name,
-                                                      MetadataSharedPtr& metadata,
+                                                      uint64_t request_id,
                                                       Upstream::LoadBalancerContext* lb_context) {
     Upstream::ThreadLocalCluster* cluster = cluster_manager_.getThreadLocalCluster(cluster_name);
     if (!cluster) {
@@ -49,12 +51,12 @@ protected:
       return {AppException(
                   Error{ErrorType::ClusterNotFound,
                         fmt::format("meta protocol router: unknown cluster '{}'", cluster_name)}),
-              absl::nullopt};
+              absl::nullopt, "unknown_cluster"};
     }
 
     cluster_ = cluster->info();
     ENVOY_LOG(debug, "meta protocol router: cluster {} match for request '{}'", cluster_->name(),
-              metadata->getRequestId());
+              request_id);
 
     if (cluster_->maintenanceMode()) {
       ENVOY_LOG(warn, "meta protocol router: maintenance mode for cluster '{}'", cluster_name);
@@ -62,7 +64,7 @@ protected:
           AppException(Error{ErrorType::Unspecified,
                              fmt::format("meta protocol router: maintenance mode for cluster '{}'",
                                          cluster_name)}),
-          absl::nullopt};
+          absl::nullopt, "cluster_in_maintenance_mode"};
     }
 
     auto conn_pool_data = cluster->tcpConnPool(Upstream::ResourcePriority::Default, lb_context);
@@ -71,10 +73,10 @@ protected:
       return {AppException(Error{
                   ErrorType::NoHealthyUpstream,
                   fmt::format("meta protocol router: no healthy upstream for '{}'", cluster_name)}),
-              absl::nullopt};
+              absl::nullopt, "no_healthy_upstream"};
     }
 
-    return {absl::nullopt, conn_pool_data};
+    return {absl::nullopt, conn_pool_data, ""};
   }
 
   Upstream::ClusterInfoConstSharedPtr cluster_;

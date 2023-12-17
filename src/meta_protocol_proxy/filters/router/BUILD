@@ -32,7 +32,7 @@ envoy_cc_library(
     deps = [
         "//src/meta_protocol_proxy/filters:filter_interface",
         "@envoy//envoy/tcp:conn_pool_interface",
-	    "@envoy//envoy/upstream:cluster_manager_interface",
+        "@envoy//envoy/upstream:cluster_manager_interface",
         "@envoy//envoy/upstream:thread_local_cluster_interface",
     ],
 )
@@ -88,6 +88,7 @@ envoy_cc_library(
         "//src/meta_protocol_proxy:app_exception_lib",
         "//src/meta_protocol_proxy/filters:filter_interface",
         "//src/meta_protocol_proxy/route:route_interface",
+        "//src/meta_protocol_proxy/tracing:tracer_lib",
         "@envoy//envoy/tcp:conn_pool_interface",
         "@envoy//envoy/upstream:cluster_manager_interface",
         "@envoy//envoy/upstream:load_balancer_interface",
@@ -95,6 +96,7 @@ envoy_cc_library(
         "@envoy//source/common/common:logger_lib",
         "@envoy//source/common/http:header_utility_lib",
         "@envoy//source/common/router:metadatamatchcriteria_lib",
+        "@envoy//source/common/stream_info:stream_info_lib",
         "@envoy//source/common/upstream:load_balancer_lib",
     ],
 )

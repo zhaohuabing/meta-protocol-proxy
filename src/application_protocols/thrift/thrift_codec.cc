@@ -55,8 +55,8 @@ MetaProtocolProxy::DecodeStatus ThriftCodec::decode(Buffer::Instance& data,
       std::string ex_msg = metadata_->appExceptionMessage();
       // Force new metadata if we get called again.
       metadata_.reset();
-      throw EnvoyException(
-          fmt::format("thrift AppException: type: {}, message: {}", ex_type, ex_msg));
+      throw EnvoyException(fmt::format("thrift AppException: type: {}, message: {}",
+			                                             static_cast<int>(ex_type), ex_msg));
     }
 
     frame_started_ = true;
@@ -108,7 +108,7 @@ void ThriftCodec::encode(const MetaProtocolProxy::Metadata& metadata,
     ENVOY_LOG(debug, "thrift: codec mutation {} : {}", keyValue.first, keyValue.second);
   }
   ENVOY_LOG(debug, "thrift: codec server real address: {} ",
-            metadata.getString(Metadata::HEADER_REAL_SERVER_ADDRESS));
+            metadata.getString(ReservedHeaders::RealServerAddress));
   // ASSERT(buffer.length() == 0);
   switch (metadata.getMessageType()) {
   case MetaProtocolProxy::MessageType::Heartbeat: {
@@ -127,7 +127,7 @@ void ThriftCodec::encode(const MetaProtocolProxy::Metadata& metadata,
     break;
   }
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reachec");
   }
 }
 
@@ -154,21 +154,26 @@ void ThriftCodec::onError(const MetaProtocolProxy::Metadata& metadata,
 
   msgMetadata.setMessageType(ThriftProxy::MessageType::Exception);
 
-  protocol_->writeMessageBegin(buffer, msgMetadata);
-  protocol_->writeStructBegin(buffer, TApplicationException);
+  Buffer::OwnedImpl response_buffer;
 
-  protocol_->writeFieldBegin(buffer, MessageField, ThriftProxy::FieldType::String, 1);
-  protocol_->writeString(buffer, error.message);
-  protocol_->writeFieldEnd(buffer);
+  protocol_->writeMessageBegin(response_buffer, msgMetadata);
+  protocol_->writeStructBegin(response_buffer, TApplicationException);
 
-  protocol_->writeFieldBegin(buffer, TypeField, ThriftProxy::FieldType::I32, 2);
-  protocol_->writeInt32(buffer, static_cast<int32_t>(ThriftProxy::AppExceptionType::InternalError));
-  protocol_->writeFieldEnd(buffer);
+  protocol_->writeFieldBegin(response_buffer, MessageField, ThriftProxy::FieldType::String, 1);
+  protocol_->writeString(response_buffer, error.message);
+  protocol_->writeFieldEnd(response_buffer);
 
-  protocol_->writeFieldBegin(buffer, StopField, ThriftProxy::FieldType::Stop, 0);
+  protocol_->writeFieldBegin(response_buffer, TypeField, ThriftProxy::FieldType::I32, 2);
+  protocol_->writeInt32(response_buffer, static_cast<int32_t>(ThriftProxy::AppExceptionType::InternalError));
+  protocol_->writeFieldEnd(response_buffer);
 
-  protocol_->writeStructEnd(buffer);
-  protocol_->writeMessageEnd(buffer);
+  protocol_->writeFieldBegin(response_buffer, StopField, ThriftProxy::FieldType::Stop, 0);
+
+  protocol_->writeStructEnd(response_buffer);
+  protocol_->writeMessageEnd(response_buffer);
+
+  // frame process
+  transport_->encodeFrame(buffer, msgMetadata, response_buffer);
 }
 
 void ThriftCodec::toMetadata(const ThriftProxy::MessageMetadata& msgMetadata, Metadata& metadata) {
@@ -198,7 +203,7 @@ void ThriftCodec::toMetadata(const ThriftProxy::MessageMetadata& msgMetadata, Me
     break;
   }
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reachec");
   }
 
   transport_->encodeFrame(metadata.originMessage(), msgMetadata, state_machine_->originalMessage());
@@ -564,7 +569,7 @@ ProtocolState DecoderStateMachine::handleState(Buffer::Instance& buffer) {
   case ProtocolState::MessageEnd:
     return messageEnd(buffer);
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reachec");
   }
 }
 

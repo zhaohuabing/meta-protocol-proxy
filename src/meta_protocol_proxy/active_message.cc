@@ -44,8 +44,12 @@ void ActiveResponseDecoder::onMessageDecoded(MetadataSharedPtr metadata,
                                              MutationSharedPtr mutation) {
   ASSERT(metadata->getMessageType() == MessageType::Response ||
          metadata->getMessageType() == MessageType::Error);
+  parent_.stream_info_->addBytesReceived(metadata->getMessageSize());
+  parent_.stream_info_->onRequestComplete();
 
   metadata_ = metadata;
+  MetadataImpl* metadataImpl = static_cast<MetadataImpl*>(&(*metadata));
+  metadataImpl->setStreamInfo(parent_.stream_info_);
   if (applyMessageEncodedFilters(metadata, mutation) != FilterStatus::ContinueIteration) {
     response_status_ = UpstreamResponseStatus::Complete;
     return;
@@ -56,10 +60,9 @@ void ActiveResponseDecoder::onMessageDecoded(MetadataSharedPtr metadata,
   }
 
   // put real server ip in the response
-  metadata_->putString(Metadata::HEADER_REAL_SERVER_ADDRESS,
-                       request_metadata_.getString(Metadata::HEADER_REAL_SERVER_ADDRESS));
-  // TODO support response mutation
-  codec_->encode(*metadata_, Mutation{}, metadata->originMessage());
+  metadata_->putString(ReservedHeaders::RealServerAddress,
+                       request_metadata_.getString(ReservedHeaders::RealServerAddress));
+  codec_->encode(*metadata_, *mutation, metadata->originMessage());
   downstream_connection_.write(metadata->originMessage(), false);
   ENVOY_LOG(debug,
             "meta protocol {} response: the upstream response message has been forwarded to the "
@@ -79,7 +82,7 @@ void ActiveResponseDecoder::onMessageDecoded(MetadataSharedPtr metadata,
   default:
     stats_.response_error_.inc();
     ENVOY_LOG(error, "meta protocol {} response status: {}", application_protocol_,
-              metadata->getResponseStatus());
+              static_cast<int>(metadata->getResponseStatus()));
     break;
   }
 
@@ -184,6 +187,34 @@ void ActiveMessageDecoderFilter::setUpstreamConnection(
   return activeMessage_.setUpstreamConnection(std::move(conn));
 }
 
+Tracing::MetaProtocolTracerSharedPtr ActiveMessageDecoderFilter::tracer() {
+  return activeMessage_.tracer();
+}
+
+Tracing::TracingConfig* ActiveMessageDecoderFilter::tracingConfig() {
+  return activeMessage_.tracingConfig();
+}
+
+RequestIDExtensionSharedPtr ActiveMessageDecoderFilter::requestIDExtension() {
+  return activeMessage_.requestIDExtension();
+}
+
+const std::vector<AccessLog::InstanceSharedPtr>& ActiveMessageDecoderFilter::accessLogs() {
+  return activeMessage_.accessLogs();
+}
+
+GetUpstreamHandlerResult
+ActiveMessageDecoderFilter::getUpstreamHandler(const std::string& cluster_name,
+                                               Upstream::LoadBalancerContext& context) {
+  return activeMessage_.getUpstreamHandler(cluster_name, context);
+}
+
+bool ActiveMessageDecoderFilter::multiplexing() { return activeMessage_.multiplexing(); }
+
+void ActiveMessageDecoderFilter::onUpstreamResponse() {
+  return activeMessage_.onUpstreamResponse();
+}
+
 // class ActiveMessageEncoderFilter
 ActiveMessageEncoderFilter::ActiveMessageEncoderFilter(ActiveMessage& parent,
                                                        EncoderFilterSharedPtr filter,
@@ -211,8 +242,9 @@ ActiveMessage::ActiveMessage(ConnectionManager& connection_manager)
           connection_manager.stats().request_time_ms_, connection_manager.timeSystem())),
       stream_id_(
           connection_manager.randomGenerator().random()), // todo: we don't need stream id here?
-      stream_info_(connection_manager.timeSystem(),
-                   connection_manager.connection().connectionInfoProviderSharedPtr()),
+      stream_info_(std::make_unique<StreamInfo::StreamInfoImpl>(
+          connection_manager.timeSystem(),
+          connection_manager.connection().connectionInfoProviderSharedPtr())),
       pending_stream_decoded_(false), local_response_sent_(false) {
   connection_manager.stats().request_active_.inc();
 }
@@ -270,6 +302,14 @@ ActiveMessage::commonDecodePrefix(ActiveMessageDecoderFilter* filter,
 
 void ActiveMessage::onMessageDecoded(MetadataSharedPtr metadata, MutationSharedPtr mutation) {
   connection_manager_.stats().request_decoding_success_.inc();
+  stream_info_->addBytesSent(metadata->getMessageSize());
+
+  // application protocol will be used to emit access log
+  // Todo This may not be the best place to set application protocol for metadata, we better set it
+  // at the decode machine
+  metadata->putString(ReservedHeaders::ApplicationProtocol,
+                      connection_manager_.config().applicationProtocol());
+
   bool needApplyFilters = false;
   switch (metadata->getMessageType()) {
   case MessageType::Request:
@@ -355,7 +395,7 @@ void ActiveMessage::onMessageDecoded(MetadataSharedPtr metadata, MutationSharedP
       maybeDeferredDeleteMessage();
       break;
     default:
-      NOT_REACHED_GCOVR_EXCL_LINE;
+      PANIC("invalid filter status");
     }
   } else {
     maybeDeferredDeleteMessage();
@@ -370,6 +410,31 @@ void ActiveMessage::onMessageDecoded(MetadataSharedPtr metadata, MutationSharedP
 void ActiveMessage::setUpstreamConnection(Tcp::ConnectionPool::ConnectionDataPtr conn) {
   connection_manager_.getActiveStream(metadata_->getStreamId()).setUpstreamConn(std::move(conn));
 }
+
+Tracing::MetaProtocolTracerSharedPtr ActiveMessage::tracer() {
+  return connection_manager_.tracer();
+}
+
+Tracing::TracingConfig* ActiveMessage::tracingConfig() {
+  return connection_manager_.tracingConfig();
+}
+
+RequestIDExtensionSharedPtr ActiveMessage::requestIDExtension() {
+  return connection_manager_.requestIDExtension();
+}
+
+const std::vector<AccessLog::InstanceSharedPtr>& ActiveMessage::accessLogs() {
+  return connection_manager_.accessLogs();
+}
+
+GetUpstreamHandlerResult ActiveMessage::getUpstreamHandler(const std::string& cluster_name,
+                                                           Upstream::LoadBalancerContext& context) {
+  return connection_manager_.getUpstreamHandler(cluster_name, context);
+}
+
+bool ActiveMessage::multiplexing() { return connection_manager_.config().multiplexing(); }
+
+void ActiveMessage::onUpstreamResponse() { connection_manager_.deferredDeleteMessage(*this); }
 
 void ActiveMessage::maybeDeferredDeleteMessage() {
   pending_stream_decoded_ = false;
@@ -544,7 +609,7 @@ uint64_t ActiveMessage::requestId() const {
 
 uint64_t ActiveMessage::streamId() const { return stream_id_; }
 
-StreamInfo::StreamInfo& ActiveMessage::streamInfo() { return stream_info_; }
+StreamInfo::StreamInfo& ActiveMessage::streamInfo() { return *stream_info_; }
 
 Event::Dispatcher& ActiveMessage::dispatcher() {
   return connection_manager_.connection().dispatcher();

@@ -35,7 +35,7 @@ ShadowRouterImpl::ShadowRouterImpl(ShadowWriterImpl& parent, const std::string& 
       decoder_(NullResponseDecoder(codec_factory.createCodec())) {}
 
 bool ShadowRouterImpl::createUpstreamRequest() {
-  auto prepare_result = prepareUpstreamRequest(cluster_name_, metadata_, this);
+  auto prepare_result = prepareUpstreamRequest(cluster_name_, metadata_->getRequestId(), this);
   if (prepare_result.exception.has_value()) {
     return false;
   }
@@ -72,7 +72,8 @@ void ShadowRouterImpl::onUpstreamData(Buffer::Instance& data, bool end_stream) {
   }
 
   UpstreamResponseStatus status = decoder_.decode(data);
-  ENVOY_LOG(debug, "******** meta protocol shadow router: response status {}", status);
+  ENVOY_LOG(debug, "******** meta protocol shadow router: response status {}",
+            static_cast<int>(status));
   switch (status) {
   case UpstreamResponseStatus::Complete:
     ENVOY_LOG(debug, "meta protocol shadow router: response complete");
@@ -88,7 +89,7 @@ void ShadowRouterImpl::onUpstreamData(Buffer::Instance& data, bool end_stream) {
     }
     return;
   default:
-    NOT_REACHED_GCOVR_EXCL_LINE;
+    PANIC("not reached");
   }
 }
 

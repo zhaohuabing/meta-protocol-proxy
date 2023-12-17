@@ -32,7 +32,7 @@ bool RequestMirrorPolicyImpl::shouldShadow(Runtime::Loader& runtime, uint64_t st
 
 RouteEntryImplBase::RouteEntryImplBase(
     const aeraki::meta_protocol_proxy::config::route::v1alpha::Route& route)
-    : cluster_name_(route.route().cluster()),
+    : route_name_(route.name()), cluster_name_(route.route().cluster()),
       config_headers_(Http::HeaderUtility::buildHeaderDataVector(route.match().metadata())),
       mirror_policies_(buildMirrorPolicies(route.route())) {
   if (route.route().cluster_specifier_case() ==
@@ -75,17 +75,19 @@ std::vector<std::shared_ptr<RequestMirrorPolicy>> RouteEntryImplBase::buildMirro
   return policies;
 }
 
+const std::string& RouteEntryImplBase::routeName() const { return route_name_; }
+
 const std::string& RouteEntryImplBase::clusterName() const { return cluster_name_; }
 
 void RouteEntryImplBase::requestMutation(MutationSharedPtr mutation) const {
   for (const auto& keyValue : request_mutation_) {
-    mutation->insert({keyValue->key(), keyValue->value()});
+    (*mutation.get())[keyValue->key()] = keyValue->value();
   }
 }
 
 void RouteEntryImplBase::responseMutation(MutationSharedPtr mutation) const {
   for (const auto& keyValue : response_mutation_) {
-    mutation->insert({keyValue->key(), keyValue->value()});
+    (*mutation.get())[keyValue->key()] = keyValue->value();
   }
 }
 
